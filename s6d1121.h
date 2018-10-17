@@ -58,9 +58,6 @@ _current_font	cfont;
 		void print(char *st, int x, int y, int deg);
 		void printNumI(long num, int x, int y, int length, char filler);
 		void setFont(uint8_t* font);
-		void lcdOff();
-		void lcdOn();
-		void setContrast(char c);
 		int  getDisplayXSize();
 		int	 getDisplayYSize();
 

@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "si5351.h": "c",
+        "ad8302.h": "c",
+        "s6d1121.h": "c"
+    }
+}
