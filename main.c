@@ -24,49 +24,25 @@
   XS=abs(2b/((1-a)²-b²))
   |Z|=sqrt(RS²+XS²)
   SWR=(1+Rho)/(1-Rho)
-
-  3.3v - 4096
-
-  1.8v = 0 degrees
-  0v   = 180 degrees
-
-  0v = -30dB
-  1.8v= 30dB
-
-  VMAG[V ] = 0.03[V /dB] × Gain[dB] + 0.9[V ]
-  vmag = α1 · log(|VA|/|VB|) + 900 mV
-  α1 = 600 mV/decade (or 30 mV dB−1)
-  
-  VP HS[V ] = 0.01[V /°] × (±Phase[°] + 180°)
-  vp = 0.01 (phase + 180) 
-  vp/0.01 = phase + 180
-
-  vphs = α2 · (|θA − θB| − 90◦) + 900 mV
-  α2 = −10 mV/degree
-
 */
 
 #include "main.h"
 #include <math.h>
 #include "s6d1121.h"
 #include "si5351.h"
+#include "ad8302.h"
 
-#define ADC18 ((4096/3.3)*1.8)  // count for 1.8v 2234,1818181818181818181818181818
-#define offsetDb (-30.0)
-#define offsetPhi (180.0)
-#define ADC2dB (60.0/ADC18)       // 0,02685546875
-#define ADC2Angle (180.0/ADC18)   // 0,08056640625
+#define ADC2VOLT (3.3/4096.0)
+#define offsetdB (30.0)
+#define offsetDegrees (90.0)
 
 ADC_HandleTypeDef hadc1;
 ADC_HandleTypeDef hadc2;
 I2C_HandleTypeDef hi2c1;
-TIM_HandleTypeDef htim2;
-UART_HandleTypeDef huart1;
 
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_ADC2_Init(void);
 
@@ -75,26 +51,18 @@ uint8_t position_x = 0;
 
 float RL;
 float Phi;
-float Rho;
-float Rs;
-float Xs;
-float Swr;
-float Z;
+float Pho;
 
-float Z0 = 50.0;
-float calPhs = 0.0;           // Calibration Phase
-float calMag = 0.0;
-
-  int main(void)
-  {
+  int main(void) {
     // Инициализация переферии
     HAL_Init();
     SystemClock_Config();
     MX_GPIO_Init();
     MX_I2C1_Init();
-    MX_TIM2_Init();
     MX_ADC1_Init();
     MX_ADC2_Init();
+    while(HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK);  
+    while(HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK);  
     // Конец Инициализации
 
     disp_x_size = 239;
@@ -122,8 +90,17 @@ float calMag = 0.0;
       for (uint8_t i = 20; i < 40; i++) {
 
         si5351_set_freq(i*10000000UL, SI5351_CLK0);
-        HAL_Delay(100);  
+        HAL_Delay(100);
 
+        AD8302_RX t = AD8302_MeasureRX();
+
+        print("R", 1, position_x, 0);      
+        printNumI(t.R, cfont.x_size*2, position_x, 1,' '); // FIXME:
+        print("X", cfont.x_size*6, position_x, 0);      
+        printNumI(t.X , cfont.x_size*8, position_x, 1,' ');
+        
+
+/*
         Phi = 0;
         RL = 0;
 
@@ -139,25 +116,40 @@ float calMag = 0.0;
             HAL_ADC_Stop(&hadc2);
           }
 
-        Phi = Phi/255;
-        RL = RL/255;
+        Phi = Phi/255*ADC2VOLT;
+        if (Phi > 1.80) Phi = 1.80;
+        RL = RL/255*ADC2VOLT;
+        if (RL > 1.80) RL = 1.80;
 
-        print("RL", 1, position_x +=cfont.y_size, 0);      
-        printNumI(RL, cfont.x_size*3, position_x, 1,' ');
-        print("Phi", cfont.x_size*8, position_x, 0);      
-        printNumI(Phi, cfont.x_size*12, position_x, 1,' ');
+        RL = RL/0.03 - offsetdB;
+        Phi = Phi/0.01 - offsetDegrees;
 
-        RL = ADC2dB*RL + offsetDb + calMag;
-        
-        Phi = ADC2Angle*Phi;
-        if (Phi > 180) Phi = 180;
+        if (RL > 30.0) RL = 30.0;
+        if (RL < -30.0) RL = -30.0;
+        if (Phi > 180.0) Phi = 180.0;
+        if (Phi < 0.0) Phi = 0.0;
 
-        Phi = offsetPhi - Phi + calPhs;
+        print("RL", 1, position_x, 0);      
+        printNumI(RL, cfont.x_size*3, position_x, 1,' '); // FIXME:
+        print("Phi", cfont.x_size*6, position_x, 0);      
+        printNumI(Phi , cfont.x_size*10, position_x, 1,' ');
 
-        print("db", cfont.x_size*17, position_x, 0);      
-        printNumI(RL, cfont.x_size*20, position_x, 1,' ');
+        float Rho = powf(10.0, RL * 0.05);
+        print("Pho", cfont.x_size*13, position_x, 0);      
+        printNumI(Pho , cfont.x_size*17, position_x, 1,' ');
 
-        Rho = powf(10.0, RL/-20.0);
+
+        Phi = 3.1416 - Phi * 3.1416;
+        if (Phi > 3.1416 / 2) Phi = 3.1416 / 2;
+
+        float R = (cosf(Phi) * Rtotal * Rho) - (Rmeas + RmeasAdd);
+        if(R < 0.0) R = 0.0;
+
+        print("R", cfont.x_size*21, position_x, 0);      
+        printNumI(R, cfont.x_size*23, position_x, 1,' ');
+
+/*
+
 
 /*        
         float re = (float)(Rho*cosf(Phi));
@@ -168,6 +160,7 @@ float calMag = 0.0;
         Z = sqrtf(Rs*Rs+Xs*Xs);
         Swr = fabs((1.0+Rho)/(1.0-Rho));
 */
+/*
         Rho = sqrtf(powf(Rho,2)+1-2*Rho*cosf(Phi));
         Swr = fabs((1.0+Rho)/(1.0-Rho));
 
@@ -178,7 +171,7 @@ float calMag = 0.0;
           position_x = 0;
           clrScr();
         }
-
+*/
       }
 /*
       Ko = sqrt( (pow(RL, 2) + 4 - (4*RL*cos(Phi))) );
@@ -285,7 +278,7 @@ static void MX_ADC1_Init(void)
     */
   sConfig.Channel = ADC_CHANNEL_8;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     _Error_Handler(__FILE__, __LINE__);
@@ -317,7 +310,7 @@ static void MX_ADC2_Init(void)
     */
   sConfig.Channel = ADC_CHANNEL_9;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
   {
     _Error_Handler(__FILE__, __LINE__);
@@ -351,39 +344,6 @@ static void MX_I2C1_Init(void)
 
 }
 
-/* TIM2 init function */
-static void MX_TIM2_Init(void)
-{
-
-  TIM_ClockConfigTypeDef sClockSourceConfig;
-  TIM_MasterConfigTypeDef sMasterConfig;
-
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 35999;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 800;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-}
-
 /** Configure pins as
         * Analog
         * Input
@@ -402,35 +362,35 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, LCD_CS_Pin|LCD_RST_Pin|LCD_RS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, LCD_CS_Pin_Pin|LCD_RST_Pin_Pin|LCD_RS_Pin_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LCD_WR_GPIO_Port, LCD_WR_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LCD_WR_Pin_GPIO_Port, LCD_WR_Pin_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : AD8302_A_Blue_Pin */
-  GPIO_InitStruct.Pin = AD8302_A_Blue_Pin;
+  /*Configure GPIO pins : AD8302_a_Pin AD8302_a_b_Pin */
+  GPIO_InitStruct.Pin = AD8302_a_Pin|AD8302_a_b_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-  HAL_GPIO_Init(AD8302_A_Blue_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : LCD_CS_Pin LCD_RST_Pin LCD_RS_Pin */
-  GPIO_InitStruct.Pin = LCD_CS_Pin|LCD_RST_Pin|LCD_RS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : ENC_2_Pin ENC_1_Pin ENC_BUTTON_Pin */
-  GPIO_InitStruct.Pin = ENC_2_Pin|ENC_1_Pin|ENC_BUTTON_Pin;
+  /*Configure GPIO pins : LCD_CS_Pin_Pin LCD_RST_Pin_Pin LCD_RS_Pin_Pin */
+  GPIO_InitStruct.Pin = LCD_CS_Pin_Pin|LCD_RST_Pin_Pin|LCD_RS_Pin_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : enc_A_Pin enc_B_Pin enc_Button_Pin */
+  GPIO_InitStruct.Pin = enc_A_Pin|enc_B_Pin|enc_Button_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LCD_WR_Pin */
-  GPIO_InitStruct.Pin = LCD_WR_Pin;
+  /*Configure GPIO pin : LCD_WR_Pin_Pin */
+  GPIO_InitStruct.Pin = LCD_WR_Pin_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(LCD_WR_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LCD_WR_Pin_GPIO_Port, &GPIO_InitStruct);
 
 }
 
